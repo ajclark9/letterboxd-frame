@@ -1,0 +1,11 @@
+[Unit]
+Description=Letterboxd frame update
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+User=pi
+# Change the URL and --display (fake -> inky or waveshare) when the panel arrives.
+ExecStart=/usr/bin/python3 /home/pi/letterboxd-frame/pi/frame.py --url https://YOUR-USERNAME.github.io/YOUR-REPO/frame.png --display fake
+TimeoutStartSec=180

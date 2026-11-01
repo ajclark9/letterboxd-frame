@@ -1,0 +1,10 @@
+[Unit]
+Description=Check for a new Letterboxd frame every 5 minutes
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

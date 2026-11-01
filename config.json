@@ -1,0 +1,10 @@
+{
+  "usernames": ["your-letterboxd-username", "a-friend"],
+  "width": 1600,
+  "height": 1200,
+  "mode": "rotate",
+  "rotate_minutes": 60,
+  "rotate_pool": 10,
+  "hide_spoilers": true,
+  "show_poster": true
+}

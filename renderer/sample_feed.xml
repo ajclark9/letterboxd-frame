@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:letterboxd="https://letterboxd.com" xmlns:tmdb="https://themoviedb.org">
+  <channel>
+    <title>Letterboxd - Sample Member</title>
+    <item>
+      <title>Paddington 2, 2017 - ★★★★½</title>
+      <link>https://letterboxd.com/sample/film/paddington-2/</link>
+      <guid isPermaLink="false">letterboxd-review-1001</guid>
+      <pubDate>Sat, 31 Oct 2026 21:10:00 +1300</pubDate>
+      <letterboxd:watchedDate>2026-10-31</letterboxd:watchedDate>
+      <letterboxd:rewatch>Yes</letterboxd:rewatch>
+      <letterboxd:filmTitle>Paddington 2</letterboxd:filmTitle>
+      <letterboxd:filmYear>2017</letterboxd:filmYear>
+      <letterboxd:memberRating>4.5</letterboxd:memberRating>
+      <letterboxd:memberLike>Yes</letterboxd:memberLike>
+      <description><![CDATA[ <p><img src=""/></p> <p>Fourth time watching this and the prison sequence still gets me. Every single frame is built with the care of a dollhouse, and Hugh Grant is clearly having the time of his life.</p><p>If you are having a bad week, this is the cure.</p> ]]></description>
+      <dc:creator>Sample Member</dc:creator>
+    </item>
+    <item>
+      <title>Heat, 1995 - ★★★★★</title>
+      <link>https://letterboxd.com/sample/film/heat-1995/</link>
+      <guid isPermaLink="false">letterboxd-review-1000</guid>
+      <pubDate>Fri, 30 Oct 2026 20:00:00 +1300</pubDate>
+      <letterboxd:watchedDate>2026-10-30</letterboxd:watchedDate>
+      <letterboxd:rewatch>No</letterboxd:rewatch>
+      <letterboxd:filmTitle>Heat</letterboxd:filmTitle>
+      <letterboxd:filmYear>1995</letterboxd:filmYear>
+      <letterboxd:memberRating>5.0</letterboxd:memberRating>
+      <description><![CDATA[ <p><img src=""/></p> <p><em>This review may contain spoilers.</em></p> <p>The ending at the airport...</p> ]]></description>
+      <dc:creator>Sample Member</dc:creator>
+    </item>
+    <item>
+      <title>Alien, 1979</title>
+      <link>https://letterboxd.com/sample/film/alien/</link>
+      <guid isPermaLink="false">letterboxd-watch-999</guid>
+      <pubDate>Thu, 29 Oct 2026 20:00:00 +1300</pubDate>
+      <letterboxd:filmTitle>Alien</letterboxd:filmTitle>
+      <letterboxd:filmYear>1979</letterboxd:filmYear>
+      <description><![CDATA[ <p><img src=""/></p> <p>Watched on Thursday October 29, 2026.</p> ]]></description>
+      <dc:creator>Sample Member</dc:creator>
+    </item>
+  </channel>
+</rss>

@@ -1,0 +1,57 @@
+name: Render frame
+
+on:
+  schedule:
+    - cron: "*/30 * * * *"   # every 30 min (GitHub may start it a few minutes late)
+  workflow_dispatch:          # "Run workflow" button for testing
+  push:
+    branches: [main]
+    paths: ["renderer/**", "config.json", ".github/workflows/render.yml"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: render-frame
+  cancel-in-progress: false
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: renderer/requirements.txt
+
+      - name: Install fonts and deps
+        run: |
+          sudo apt-get install -y --no-install-recommends fonts-dejavu-core
+          pip install -r renderer/requirements.txt
+
+      - name: Render
+        run: python renderer/render.py --out site
+
+      - name: Publish to the 'frame' branch if the image changed
+        run: |
+          NEW=$(jq -r .sha256 site/frame.json)
+          OLD=$(git fetch -q origin frame 2>/dev/null && git show origin/frame:frame.json 2>/dev/null | jq -r .sha256 || echo none)
+          echo "old=$OLD new=$NEW"
+          if [ "$NEW" = "$OLD" ]; then
+            echo "Image unchanged, nothing to publish."
+            exit 0
+          fi
+          cp renderer/index.html site/
+          touch site/.nojekyll
+          cd site
+          git init -q -b frame
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "Frame update $(date -u +%FT%TZ)"
+          # Force-push a single commit so the branch never accumulates image history.
+          git push -q -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" frame
