@@ -7,5 +7,5 @@ After=network-online.target
 Type=oneshot
 User=pi
 # Change the URL and --display (fake -> inky or waveshare) when the panel arrives.
-ExecStart=/usr/bin/python3 /home/pi/letterboxd-frame/pi/frame.py --url https://YOUR-USERNAME.github.io/YOUR-REPO/frame.png --display fake
+ExecStart=/usr/bin/python3 /home/pi/letterboxd-frame/pi/frame.py --url https://ajclark9.github.io/letterboxd-frame/frame.png --display fake
 TimeoutStartSec=180
