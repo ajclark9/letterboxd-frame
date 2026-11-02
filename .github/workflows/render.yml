@@ -2,7 +2,7 @@ name: Render frame
 
 on:
   schedule:
-    - cron: "*/30 * * * *"   # every 30 min (GitHub may start it a few minutes late)
+    - cron: "2-59/5 * * * *"   # every 5 min (GitHub may start it a few minutes late)
   workflow_dispatch:          # "Run workflow" button for testing
   push:
     branches: [main]

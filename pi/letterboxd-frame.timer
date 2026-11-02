@@ -3,7 +3,7 @@ Description=Check for a new Letterboxd frame every 5 minutes
 
 [Timer]
 OnBootSec=1min
-OnUnitActiveSec=5min
+OnUnitActiveSec=1min
 Persistent=true
 
 [Install]
