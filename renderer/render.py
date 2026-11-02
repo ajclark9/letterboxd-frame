@@ -123,6 +123,49 @@ def parse_feed(xml_text: str, username: str) -> list[dict]:
     return reviews
 
 
+def clean_username(cell: str) -> str | None:
+    """Accepts 'name', '@name', 'letterboxd.com/name/', 'https://boxd.it/...'-style junk."""
+    s = cell.strip().strip('"').strip()
+    if not s or s.startswith("#"):
+        return None
+    m = re.search(r"letterboxd\.com/([A-Za-z0-9_]+)", s)
+    if m:
+        s = m.group(1)
+    s = s.lstrip("@").strip("/ ").lower()
+    if not re.fullmatch(r"[a-z0-9_]{2,}", s):
+        return None
+    if s in {"username", "usernames", "letterboxd", "name", "user"}:  # header rows
+        return None
+    return s
+
+
+def usernames_from_csv(text: str) -> list[str]:
+    import csv
+    names = []
+    for row in csv.reader(io.StringIO(text)):
+        if row:
+            u = clean_username(row[0])
+            if u and u not in names:
+                names.append(u)
+    return names
+
+
+def load_usernames(cfg: dict) -> list[str]:
+    url = cfg.get("usernames_csv_url")
+    if url:
+        try:
+            r = requests.get(url, timeout=30)
+            r.raise_for_status()
+            names = usernames_from_csv(r.text)
+            if names:
+                print(f"{len(names)} usernames from sheet", file=sys.stderr)
+                return names
+            print("sheet had no usable usernames, using config.json", file=sys.stderr)
+        except Exception as e:
+            print(f"sheet fetch failed ({e}), using config.json", file=sys.stderr)
+    return cfg.get("usernames", [])
+
+
 def fetch_feed(username: str) -> str:
     r = requests.get(
         f"https://letterboxd.com/{username}/rss/",
@@ -154,71 +197,175 @@ def choose(reviews: list[dict], cfg: dict, now: float) -> dict | None:
 
 
 # ---------- Rendering ----------
+#
+# Everything except the poster is drawn into one grayscale mask per color at SCALE x
+# resolution with normal anti-aliasing. At the end each mask is box-downsampled and
+# thresholded, then filled with its solid Spectra color. That gives far smoother glyph
+# and star edges than drawing with anti-aliasing off, while still using only the
+# panel's 6 colors (no gray fringes that would turn into dither speckle).
 
-def wrap(draw, text, fnt, max_w):
-    lines = []
-    for para in text.split("\n"):
-        if not para.strip():
-            lines.append("")
+SCALE = 3
+THRESHOLD = 118  # a touch under 50% so thin serif strokes don't break up
+
+F_BODY = "Literata-Text.ttf"
+F_ITALIC = "Literata-Italic.ttf"
+F_TITLE = "Literata-Display.ttf"
+F_UI = "Inter-Medium.ttf"
+F_UI_BOLD = "Inter-Bold.ttf"
+
+
+class Canvas:
+    def __init__(self, w, h):
+        self.w, self.h = w, h
+        self.layers = {}   # color -> L image at SCALE x
+        self._fonts = {}
+
+    def _draw(self, color):
+        if color not in self.layers:
+            self.layers[color] = Image.new("L", (self.w * SCALE, self.h * SCALE), 0)
+        return ImageDraw.Draw(self.layers[color])
+
+    def font(self, name, size):
+        key = (name, size)
+        if key not in self._fonts:
+            self._fonts[key] = font(name, int(round(size * SCALE)))
+        return self._fonts[key]
+
+    def length(self, text, name, size, tracking=0.0):
+        f = self.font(name, size)
+        n = len(text)
+        return f.getlength(text) / SCALE + tracking * size * max(n - 1, 0)
+
+    def text(self, x, baseline, text, name, size, color, tracking=0.0):
+        """Draw text with its baseline at `baseline`. tracking is in ems."""
+        d, f = self._draw(color), self.font(name, size)
+        if not tracking:
+            d.text((x * SCALE, baseline * SCALE), text, font=f, fill=255, anchor="ls")
+            return
+        cx = x * SCALE
+        for ch in text:
+            d.text((cx, baseline * SCALE), ch, font=f, fill=255, anchor="ls")
+            cx += f.getlength(ch) + tracking * size * SCALE
+
+    def polygon(self, pts, color):
+        self._draw(color).polygon([(px * SCALE, py * SCALE) for px, py in pts], fill=255)
+
+    def rect(self, x0, y0, x1, y1, color, radius=0):
+        d = self._draw(color)
+        box = (x0 * SCALE, y0 * SCALE, x1 * SCALE, y1 * SCALE)
+        if radius:
+            d.rounded_rectangle(box, radius=radius * SCALE, fill=255)
+        else:
+            d.rectangle(box, fill=255)
+
+    def ellipse(self, x0, y0, x1, y1, color):
+        self._draw(color).ellipse((x0 * SCALE, y0 * SCALE, x1 * SCALE, y1 * SCALE), fill=255)
+
+    def flatten(self, base: Image.Image, order=None):
+        order = order or list(self.layers)
+        for color in order:
+            if color not in self.layers:
+                continue
+            small = self.layers[color].resize((self.w, self.h), Image.BOX)
+            mask = small.point(lambda v: 255 if v >= THRESHOLD else 0).convert("1")
+            base.paste(color, (0, 0), mask)
+        return base
+
+
+def wrap(cv, text, name, size, max_w):
+    """Returns lines; None marks a paragraph break."""
+    out = []
+    for para in re.split(r"\n\s*\n", text.strip()):
+        para = " ".join(para.split())
+        if not para:
             continue
-        words, line = para.split(), ""
-        for w in words:
+        if out:
+            out.append(None)
+        line = ""
+        for w in para.split(" "):
             trial = f"{line} {w}".strip()
-            if draw.textlength(trial, font=fnt) <= max_w:
+            if cv.length(trial, name, size) <= max_w or not line:
                 line = trial
             else:
-                if line:
-                    lines.append(line)
+                out.append(line)
                 line = w
-        lines.append(line)
-    # collapse repeated blank lines
-    out = []
-    for l in lines:
-        if l == "" and (not out or out[-1] == ""):
-            continue
-        out.append(l)
+        out.append(line)
     return out
 
 
-def fit_text(draw, text, max_w, max_h, sizes=(46, 42, 38, 34, 30, 27, 24)):
-    """Largest font size where the review fits; truncates at the smallest size."""
+def block_height(lines, size):
+    lh, gap = size * 1.42, size * 0.62
+    return sum(gap if l is None else lh for l in lines)
+
+
+def fit_body(cv, text, max_w, max_h):
+    sizes = (58, 54, 50, 46, 43, 40, 37, 34, 31, 29, 27, 25)
     for size in sizes:
-        fnt = font("DejaVuSerif.ttf", size)
-        lh = int(size * 1.38)
-        lines = wrap(draw, text, fnt, max_w)
-        if len(lines) * lh <= max_h:
-            return fnt, lh, lines
-    max_lines = max_h // lh
-    lines = lines[:max_lines]
-    while lines and draw.textlength(lines[-1] + " …", font=fnt) > max_w:
-        lines[-1] = lines[-1].rsplit(" ", 1)[0]
-    if lines:
-        lines[-1] = lines[-1].rstrip(" ,.;:") + " …"
-    return fnt, lh, lines
+        lines = wrap(cv, text, F_BODY, size, max_w)
+        if block_height(lines, size) <= max_h:
+            return size, lines
+    # Smallest size still too long: cut it and end with an ellipsis.
+    kept, h = [], 0.0
+    for l in lines:
+        step = size * (0.62 if l is None else 1.42)
+        if h + step > max_h:
+            break
+        kept.append(l)
+        h += step
+    while kept and kept[-1] is None:
+        kept.pop()
+    if kept:
+        last = kept[-1]
+        while last and cv.length(last + " …", F_BODY, size) > max_w:
+            last = last.rsplit(" ", 1)[0] if " " in last else last[:-1]
+        kept[-1] = last.rstrip(" ,.;:—-") + " …"
+    return size, kept
 
 
-def star(draw, cx, cy, r, fill):
+def star_points(cx, cy, r, inner=0.48):
     import math
     pts = []
     for i in range(10):
-        ang = -math.pi / 2 + i * math.pi / 5
-        rr = r if i % 2 == 0 else r * 0.45
-        pts.append((cx + rr * math.cos(ang), cy + rr * math.sin(ang)))
-    draw.polygon(pts, fill=fill)
+        a = -math.pi / 2 + i * math.pi / 5
+        rr = r if i % 2 == 0 else r * inner
+        pts.append((cx + rr * math.cos(a), cy + rr * math.sin(a)))
+    return pts
 
 
-def draw_rating(draw, x, y, rating, size=34, color=GREEN):
-    """Stars in Letterboxd green; half stars drawn by clipping to the left half."""
-    full, half = int(rating), (rating - int(rating)) >= 0.5
-    step = size * 2.1
+def draw_heart(cv, x, cy, size, color):
+    """Heart about `size` px tall, left edge at x, vertically centered on cy."""
+    r = size * 0.29
+    top = cy - size * 0.40
+    cv.ellipse(x, top, x + 2 * r, top + 2 * r, color)
+    cv.ellipse(x + 2 * r * 0.92, top, x + 2 * r * 1.92, top + 2 * r, color)
+    w = 2 * r * 1.92
+    cv.polygon([(x + r * 0.06, top + r * 1.25), (x + w - r * 0.06, top + r * 1.25),
+                (x + w / 2, cy + size * 0.55)], color)
+    return x + w
+
+
+def draw_rating(cv, x, cy, rating, size=30, color=GREEN):
+    """Letterboxd style: solid stars plus a ½ for half ratings."""
+    full = int(rating)
+    half = rating - full >= 0.5
+    step = size * 2.25
     for i in range(full):
-        star(draw, x + size + i * step, y + size, size, color)
+        cv.polygon(star_points(x + size + i * step, cy, size), color)
+    end = x + full * step
     if half:
-        img = Image.new("1", (size * 2 + 2, size * 2 + 2), 0)
-        star(ImageDraw.Draw(img), size + 1, size + 1, size, 1)
-        img = img.crop((0, 0, size + 1, size * 2 + 2))
-        draw.bitmap((x + full * step, y - 1), img, fill=color)
-    return x + (full + (1 if half else 0)) * step
+        fs = size * 1.75
+        cv.text(end + size * 0.05, cy + fs * 0.36, "½", F_UI_BOLD, fs, color)
+        end += cv.length("½", F_UI_BOLD, fs) + size * 0.3
+    return end - (size * 0.25 if full and not half else 0)
+
+
+def nice_date(iso):
+    from datetime import date
+    try:
+        d = date.fromisoformat(iso)
+        return f"{d.strftime('%b')} {d.day}, {d.year}"
+    except Exception:
+        return iso
 
 
 def palette_image():
@@ -238,9 +385,15 @@ def load_poster(url, box_w, box_h):
     except Exception as e:
         print(f"poster fetch failed: {e}", file=sys.stderr)
         return None
-    img.thumbnail((box_w, box_h), Image.LANCZOS)
-    # Boost saturation/contrast a bit: e-ink pigments are duller than a monitor.
+    return dither_poster(img, box_w, box_h)
+
+
+def dither_poster(img, box_w, box_h):
     from PIL import ImageEnhance
+    img = img.convert("RGB")
+    k = min(box_w / img.width, box_h / img.height)  # fit the box, scaling up small posters too
+    img = img.resize((max(1, round(img.width * k)), max(1, round(img.height * k))), Image.LANCZOS)
+    # E-ink pigments are duller than a monitor, so push color and contrast a bit.
     img = ImageEnhance.Color(img).enhance(1.4)
     img = ImageEnhance.Contrast(img).enhance(1.15)
     return img.quantize(palette=palette_image(), dither=Image.Dither.FLOYDSTEINBERG).convert("RGB")
@@ -248,72 +401,103 @@ def load_poster(url, box_w, box_h):
 
 def render(review: dict | None, cfg: dict, poster_img=None) -> Image.Image:
     W, H = cfg.get("width", 1600), cfg.get("height", 1200)
-    img = Image.new("RGB", (W, H), WHITE)
-    d = ImageDraw.Draw(img)
-    d.fontmode = "1"  # no anti-aliasing: gray edges turn into speckle on 6 colors
+    base = Image.new("RGB", (W, H), WHITE)
+    cv = Canvas(W, H)
+    m = 72
 
-    m = 70
     if review is None:
-        d.text((m, H // 2 - 40), "No reviews yet.", font=font("DejaVuSerif-Bold.ttf", 64), fill=BLACK)
-        return img
+        cv.text(m, H / 2, "No reviews yet.", F_TITLE, 64, BLACK)
+        return cv.flatten(base)
 
+    # Poster column
     x0 = m
     if cfg.get("show_poster", True):
         pw, ph = int(W * 0.34), H - 2 * m
         if poster_img is None:
             poster_img = load_poster(review.get("poster"), pw, ph)
+        else:
+            poster_img = dither_poster(poster_img, pw, ph)
         if poster_img is not None:
             px = m + (pw - poster_img.width) // 2
             py = m + (ph - poster_img.height) // 2
-            img.paste(poster_img, (px, py))
-            x0 = m + pw + 60
-    text_w = W - x0 - m
+            base.paste(poster_img, (px, py))
+            b = 3  # crisp keyline around the dithered edge
+            cv.rect(px - b, py - b, px + poster_img.width + b, py, BLACK)
+            cv.rect(px - b, py + poster_img.height, px + poster_img.width + b, py + poster_img.height + b, BLACK)
+            cv.rect(px - b, py, px, py + poster_img.height, BLACK)
+            cv.rect(px + poster_img.width, py, px + poster_img.width + b, py + poster_img.height, BLACK)
+            x0 = m + pw + 64
+    tw = W - x0 - m
 
-    y = m
-    who = font("DejaVuSans-Bold.ttf", 34)
-    d.text((x0, y), review["member"].upper(), font=who, fill=RED)
-    y += 56
+    # Header: member, title, year + rating + like
+    y = m + 26
+    cv.text(x0, y, review["member"].upper(), F_UI_BOLD, 27, RED, tracking=0.12)
+    y += 30
 
-    title_font = font("DejaVuSerif-Bold.ttf", 64)
-    title = review["film"] or "Untitled"
-    for line in wrap(d, title, title_font, text_w)[:2]:
-        d.text((x0, y), line, font=title_font, fill=BLACK)
-        y += 76
-    if review["year"]:
-        d.text((x0, y), review["year"], font=font("DejaVuSans.ttf", 36), fill=BLUE)
-        y += 54
+    tsize = 72 if cv.length(review["film"] or "", F_TITLE, 72) <= tw * 1.6 else 60
+    tlines = [l for l in wrap(cv, review["film"] or "Untitled", F_TITLE, tsize, tw) if l]
+    if len(tlines) > 2:
+        tlines = tlines[:2]
+        while cv.length(tlines[1] + " …", F_TITLE, tsize) > tw:
+            tlines[1] = tlines[1].rsplit(" ", 1)[0]
+        tlines[1] += " …"
+    for line in tlines:
+        y += tsize * 1.08
+        cv.text(x0, y, line, F_TITLE, tsize, BLACK)
 
-    y += 10
+    y += 64
+    row_cy = y - 12
     xr = x0
+    if review["year"]:
+        cv.text(xr, y, review["year"], F_UI, 34, BLACK)
+        xr += cv.length(review["year"], F_UI, 34) + 30
     if review["rating"]:
-        xr = draw_rating(d, x0, y, review["rating"])
+        xr = draw_rating(cv, xr, row_cy, review["rating"]) + 22
     if review["liked"]:
-        hx = xr + 20
-        d.text((hx, y - 6), "♥", font=font("DejaVuSans.ttf", 66), fill=RED)
-    if review["rating"] or review["liked"]:
-        y += 90
+        draw_heart(cv, xr, row_cy, 46, RED)
 
-    d.rectangle((x0, y, x0 + 120, y + 6), fill=BLACK)
     y += 40
+    cv.rect(x0, y, x0 + 96, y + 5, BLACK)
+    y += 34
 
-    footer_h = 60
+    # Footer
+    footer_base = H - m - 4
+    footer_top = footer_base - 52
+    has_footer = bool(review["watched"] or review["rewatch"])
+
+    # Body
+    body_bottom = (footer_top - 28) if has_footer else (H - m)
     if review["spoiler"] and cfg.get("hide_spoilers", True):
-        d.text((x0, y), "This review contains spoilers,\nso it's hidden here.",
-               font=font("DejaVuSerif-Italic.ttf", 44), fill=BLACK, spacing=16)
+        s = 44
+        cv.rect(x0, y + 4, x0 + cv.length("SPOILERS", F_UI_BOLD, 22, 0.14) + 32, y + 46, RED, radius=21)
+        cv.text(x0 + 16, y + 33, "SPOILERS", F_UI_BOLD, 22, WHITE, tracking=0.14)
+        y += 46 + s * 1.5
+        cv.text(x0, y, "This review has spoilers,", F_ITALIC, s, BLACK)
+        cv.text(x0, y + s * 1.4, "so it's hidden here.", F_ITALIC, s, BLACK)
     else:
-        fnt, lh, lines = fit_text(d, review["text"], text_w, H - m - footer_h - y)
+        size, lines = fit_body(cv, review["text"], tw, body_bottom - y)
+        yb = y + size * 1.0
         for line in lines:
-            d.text((x0, y), line, font=fnt, fill=BLACK)
-            y += lh
+            if line is None:
+                yb += size * 0.62
+                continue
+            cv.text(x0, yb, line, F_BODY, size, BLACK)
+            yb += size * 1.42
 
-    footer = []
-    if review["watched"]:
-        footer.append(f"Watched {review['watched']}")
-    if review["rewatch"]:
-        footer.append("Rewatch")
-    if footer:
-        d.text((x0, H - m - 34), "  ·  ".join(footer), font=font("DejaVuSans.ttf", 30), fill=BLUE)
-    return img
+    if has_footer:
+        cv.rect(x0, footer_top, x0 + tw, footer_top + 2, BLACK)
+        fx = x0
+        if review["watched"]:
+            label = f"WATCHED {nice_date(review['watched']).upper()}"
+            cv.text(fx, footer_base, label, F_UI, 24, BLACK, tracking=0.1)
+            fx += cv.length(label, F_UI, 24, 0.1) + 22
+        if review["rewatch"]:
+            pill_w = cv.length("REWATCH", F_UI_BOLD, 20, 0.14) + 28
+            cv.rect(fx, footer_base - 27, fx + pill_w, footer_base + 9, BLUE, radius=18)
+            cv.text(fx + 14, footer_base - 2, "REWATCH", F_UI_BOLD, 20, WHITE, tracking=0.14)
+
+    # White text sits on top of the colored pills, so it is painted last.
+    return cv.flatten(base, order=[BLACK, GREEN, BLUE, RED, YELLOW, WHITE])
 
 
 def to_palette(img: Image.Image) -> Image.Image:
@@ -334,7 +518,7 @@ def main():
     if args.feed_file:
         reviews = parse_feed(Path(args.feed_file).read_text(), "local")
     else:
-        for u in cfg["usernames"]:
+        for u in load_usernames(cfg):
             try:
                 reviews += parse_feed(fetch_feed(u), u)
             except Exception as e:

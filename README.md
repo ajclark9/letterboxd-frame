@@ -19,21 +19,39 @@ Edit `config.json`:
 
 | key | what it does |
 |---|---|
-| `usernames` | Letterboxd usernames to pull reviews from |
+| `usernames_csv_url` | published Google Sheet CSV of usernames (see below); leave `""` to skip |
+| `usernames` | Letterboxd usernames to pull reviews from (fallback if the sheet fails) |
 | `mode` | `"rotate"` cycles through recent reviews; `"latest"` always shows the newest |
 | `rotate_minutes` | how long each review stays up in rotate mode |
 | `rotate_pool` | how many of the newest reviews to rotate through |
 | `hide_spoilers` | swap spoiler reviews for a "hidden" message |
 | `show_poster` | dithered poster on the left |
 
+### Letting someone else manage the list (Google Sheet)
+
+1. Make a Google Sheet. Put Letterboxd usernames in **column A**, one per row. A header row is fine.
+   It accepts `name`, `@name`, or a pasted profile link, and ignores blank rows and rows starting with `#`.
+2. **File → Share → Publish to web** → pick the sheet tab → **Comma-separated values (.csv)** → Publish. Copy the link.
+3. Paste that link into `usernames_csv_url` in `config.json` and push.
+4. Share the sheet (edit access) with whoever owns the frame.
+
+Edits show up on the frame within about an hour: Google takes a few minutes to update the
+published CSV, plus up to 30 minutes for the next workflow run, plus the Pi's 5-minute check.
+If the sheet can't be read or is empty, the `usernames` list in `config.json` is used instead.
+The published link is public but unguessable, and only contains usernames.
+
 Only reviews with text are shown; diary entries without a review and list activity are skipped.
 `width`/`height` are 1600×1200; swap them for portrait.
+
+Fonts are bundled in `fonts/` (Literata for the review, Inter for labels, both under the SIL Open
+Font License). Text and shapes are drawn at 3× and snapped to solid colors, so edges stay clean
+without anti-aliasing fringes that the panel would turn into speckle.
 
 Printing `out/frame.png` at real size (about 27 × 20 cm) is the best preview of how the panel will look.
 
 ## 2. Put it on GitHub
 
-1. Create a **public** repo (free Pages + unlimited Actions minutes) and push this folder to `main`.
+1. Create a **public** repo (free Pages + unlimited Actions minutes) and push this folder to your default branch (`main` or `master`).
 2. **Settings → Actions → General → Workflow permissions:** pick *Read and write permissions*.
 3. **Actions tab → Render frame → Run workflow.** This creates a `frame` branch.
 4. **Settings → Pages:** Source *Deploy from a branch*, branch `frame`, folder `/ (root)`.
@@ -44,8 +62,8 @@ The workflow only pushes when the image actually changed, and it force-pushes a 
 so the `frame` branch never piles up old images.
 
 **Heads up:** GitHub turns off scheduled workflows in public repos after 60 days with no repo
-activity. If the frame stops updating, check the Actions tab and re-enable it. Any push to
-`main` resets the clock.
+activity. If the frame stops updating, check the Actions tab and re-enable it. Any push to your default branch
+resets the clock.
 
 ## 3. Set up the Pi
 

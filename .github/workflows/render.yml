@@ -5,8 +5,8 @@ on:
     - cron: "2-59/5 * * * *"   # every 5 min (GitHub may start it a few minutes late)
   workflow_dispatch:          # "Run workflow" button for testing
   push:
-    branches: [main]
-    paths: ["renderer/**", "config.json", ".github/workflows/render.yml"]
+    branches: [master]
+    paths: ["renderer/**", "fonts/**", "config.json", ".github/workflows/render.yml"]
 
 permissions:
   contents: write
@@ -28,10 +28,8 @@ jobs:
           cache: pip
           cache-dependency-path: renderer/requirements.txt
 
-      - name: Install fonts and deps
-        run: |
-          sudo apt-get install -y --no-install-recommends fonts-dejavu-core
-          pip install -r renderer/requirements.txt
+      - name: Install deps
+        run: pip install -r renderer/requirements.txt
 
       - name: Render
         run: python renderer/render.py --out site
