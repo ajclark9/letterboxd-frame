@@ -94,6 +94,35 @@ To watch the fake display from your phone while you wait for the panel:
 cd ~/.letterboxd-frame && python3 -m http.server 8000   # then open http://<pi-ip>:8000/displayed.png
 ```
 
+## Running everything on the Pi (no GitHub)
+
+`frame.py --local` fetches the feeds and renders the frame on the Pi itself, so the frame
+doesn't depend on GitHub Actions or Pages at all. It reads `config.json` from the repo (the
+Google Sheet setting works the same way).
+
+```bash
+sudo apt install -y python3-pil python3-requests
+python3 ~/letterboxd-frame/pi/frame.py --local          # try it once with the fake display
+```
+
+Then switch the service to option B in `pi/letterboxd-frame.service` (comment out A).
+
+- Feeds are checked at most every 10 minutes (`--fetch-every 10`), even with the timer running
+  every minute, so the frame isn't constantly hitting Letterboxd.
+- It only re-renders when the chosen review or the config changed, and only refreshes the
+  panel when the image changed.
+- If every feed fails (Wi-Fi down, Letterboxd down), the screen is left alone.
+- Rendering takes a few seconds on a Zero 2 W. Add `--scale 2` to make it faster with
+  slightly less smooth edges.
+
+To change the layout later without SSHing in, have the Pi pull your repo every hour:
+
+```bash
+crontab -e
+# add this line:
+17 * * * * cd ~/letterboxd-frame && git pull -q --ff-only
+```
+
 ## 4. When the panel arrives
 
 Enable SPI and I2C: `sudo raspi-config` → Interface Options.

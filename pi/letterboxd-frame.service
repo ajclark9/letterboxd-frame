@@ -6,6 +6,12 @@ After=network-online.target
 [Service]
 Type=oneshot
 User=pi
-# Change the URL and --display (fake -> inky or waveshare) when the panel arrives.
+# Pick ONE ExecStart. Change --display (fake -> inky or waveshare) when the panel arrives.
+#
+# A) Download the image rendered by GitHub Actions:
 ExecStart=/usr/bin/python3 /home/pi/letterboxd-frame/pi/frame.py --url https://ajclark9.github.io/letterboxd-frame/frame.png --display fake
+#
+# B) Render on the Pi itself (no GitHub needed). Checks feeds every 10 minutes even though
+#    the timer runs every minute; add --scale 2 if rendering feels slow.
+#ExecStart=/usr/bin/python3 /home/pi/letterboxd-frame/pi/frame.py --local --display fake
 TimeoutStartSec=180

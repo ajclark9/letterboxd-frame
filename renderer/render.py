@@ -505,6 +505,49 @@ def to_palette(img: Image.Image) -> Image.Image:
     return img.quantize(palette=palette_image(), dither=Image.Dither.NONE)
 
 
+class AllFeedsFailed(RuntimeError):
+    """Every feed failed (offline, Letterboxd down...). Callers should keep the old image."""
+
+
+def gather_reviews(cfg: dict, feed_file: str | None = None) -> list[dict]:
+    if feed_file:
+        return parse_feed(Path(feed_file).read_text(), "local")
+    names = load_usernames(cfg)
+    reviews, ok = [], 0
+    for u in names:
+        try:
+            reviews += parse_feed(fetch_feed(u), u)
+            ok += 1
+        except Exception as e:
+            print(f"feed {u} failed: {e}", file=sys.stderr)
+    if names and ok == 0:
+        raise AllFeedsFailed(f"all {len(names)} feeds failed")
+    return reviews
+
+
+def selection_key(review: dict | None, cfg: dict) -> str:
+    """Changes whenever the rendered image would change: the review shown or the config."""
+    return hashlib.sha256(json.dumps([review, cfg], sort_keys=True).encode()).hexdigest()
+
+
+def build_frame(cfg: dict, reviews: list[dict], now: float | None = None) -> tuple[bytes, dict]:
+    global SCALE
+    SCALE = int(cfg.get("render_scale", SCALE))
+    review = choose(reviews, cfg, time.time() if now is None else now)
+    img = to_palette(render(review, cfg))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", optimize=True)
+    data = buf.getvalue()
+    meta = {
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "review_id": review["id"] if review else None,
+        "member": review["member"] if review else None,
+        "film": review["film"] if review else None,
+        "reviews_found": len(reviews),
+    }
+    return data, meta
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", default=str(ROOT / "config.json"))
@@ -514,32 +557,16 @@ def main():
     args = ap.parse_args()
 
     cfg = json.loads(Path(args.config).read_text())
-    reviews = []
-    if args.feed_file:
-        reviews = parse_feed(Path(args.feed_file).read_text(), "local")
-    else:
-        for u in load_usernames(cfg):
-            try:
-                reviews += parse_feed(fetch_feed(u), u)
-            except Exception as e:
-                print(f"feed {u} failed: {e}", file=sys.stderr)
-
-    review = choose(reviews, cfg, args.now if args.now is not None else time.time())
-    img = to_palette(render(review, cfg))
+    try:
+        reviews = gather_reviews(cfg, args.feed_file)
+    except AllFeedsFailed as e:
+        # Fail the run so the workflow doesn't publish a "No reviews" frame.
+        sys.exit(f"{e}; not publishing")
+    data, meta = build_frame(cfg, reviews, args.now)
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
-    buf = io.BytesIO()
-    img.save(buf, format="PNG", optimize=True)
-    data = buf.getvalue()
     (out / "frame.png").write_bytes(data)
-    meta = {
-        "sha256": hashlib.sha256(data).hexdigest(),
-        "review_id": review["id"] if review else None,
-        "member": review["member"] if review else None,
-        "film": review["film"] if review else None,
-        "reviews_found": len(reviews),
-    }
     (out / "frame.json").write_text(json.dumps(meta, indent=2))
     print(json.dumps(meta))
 
