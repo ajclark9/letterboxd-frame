@@ -1,5 +1,5 @@
 [Unit]
-Description=Check for a new Letterboxd frame every 5 minutes
+Description=Check for a new Letterboxd frame every minute
 
 [Timer]
 OnBootSec=1min

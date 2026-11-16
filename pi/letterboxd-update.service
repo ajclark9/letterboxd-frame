@@ -1,0 +1,12 @@
+# Template: pi/install.sh fills in @REPO@. Pulls the repo from GitHub and re-installs the
+# Pi pieces if they changed. Runs as root so it can update the systemd units; the git pull
+# itself runs as the repo's owner.
+[Unit]
+Description=Update the Letterboxd frame code from GitHub
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/bash @REPO@/pi/update.sh
+TimeoutStartSec=600

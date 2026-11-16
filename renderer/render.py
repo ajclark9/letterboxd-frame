@@ -35,6 +35,10 @@ RED = (255, 0, 0)
 BLUE = (0, 0, 255)
 GREEN = (0, 255, 0)
 SPECTRA = [BLACK, WHITE, YELLOW, RED, BLUE, GREEN]
+# How those 6 pigments actually look on the panel (measured values from Pimoroni's inky
+# driver for the 13.3" Spectra 6). Posters are dithered against these so the dots mix to
+# the right tones, then written out using the pure colors above.
+PANEL = [(0, 0, 0), (161, 164, 165), (208, 190, 71), (156, 72, 75), (61, 59, 94), (58, 91, 70)]
 
 NS = {
     "letterboxd": "https://letterboxd.com",
@@ -375,7 +379,7 @@ def palette_image():
     return pal
 
 
-def load_poster(url, box_w, box_h):
+def load_poster(url, box_w, box_h, cfg=None):
     if not url:
         return None
     try:
@@ -385,18 +389,71 @@ def load_poster(url, box_w, box_h):
     except Exception as e:
         print(f"poster fetch failed: {e}", file=sys.stderr)
         return None
-    return dither_poster(img, box_w, box_h)
+    return dither_poster(img, box_w, box_h, cfg)
 
 
-def dither_poster(img, box_w, box_h):
-    from PIL import ImageEnhance
+def palette_from(colors):
+    pal = Image.new("P", (1, 1))
+    flat = [c for rgb in colors for c in rgb]
+    pal.putpalette(flat + [0] * (768 - len(flat)))
+    return pal
+
+
+def dither_palette(realism):
+    """Mix between pure RGB (0) and the panel's measured colors (1)."""
+    t = max(0.0, min(1.0, float(realism)))
+    return [tuple(round(r * t + p * (1 - t)) for r, p in zip(rc, pc)) for rc, pc in zip(PANEL, SPECTRA)]
+
+
+def dither_poster(img, box_w, box_h, cfg=None):
+    from PIL import ImageEnhance, ImageFilter
+    cfg = cfg or {}
     img = img.convert("RGB")
     k = min(box_w / img.width, box_h / img.height)  # fit the box, scaling up small posters too
     img = img.resize((max(1, round(img.width * k)), max(1, round(img.height * k))), Image.LANCZOS)
-    # E-ink pigments are duller than a monitor, so push color and contrast a bit.
-    img = ImageEnhance.Color(img).enhance(1.4)
-    img = ImageEnhance.Contrast(img).enhance(1.15)
-    return img.quantize(palette=palette_image(), dither=Image.Dither.FLOYDSTEINBERG).convert("RGB")
+    img = img.filter(ImageFilter.UnsharpMask(radius=1.2, percent=60, threshold=2))
+    img = ImageEnhance.Color(img).enhance(cfg.get("poster_color", 1.2))
+    img = ImageEnhance.Contrast(img).enhance(cfg.get("poster_contrast", 1.1))
+    # Dither against what the panel really shows, then store the pure colors the driver expects.
+    idx = img.quantize(palette=palette_from(dither_palette(cfg.get("poster_realism", 0.5))),
+                       dither=Image.Dither.FLOYDSTEINBERG)
+    idx.putpalette([c for rgb in SPECTRA for c in rgb] + [0] * (768 - 18))
+    return idx.convert("RGB")
+
+
+def panel_preview(img: Image.Image) -> Image.Image:
+    """Approximate how a frame looks on the real panel (muted pigments, gray-ish white)."""
+    idx = img.convert("RGB").quantize(palette=palette_image(), dither=Image.Dither.NONE)
+    idx.putpalette([c for rgb in PANEL for c in rgb] + [0] * (768 - 18))
+    return idx.convert("RGB")
+
+
+def load_logo(cfg: dict, height: int):
+    """Logo as black-on-white line art (or the original boxed version), `height` px tall.
+    Off unless config.json sets "logo" to an image path, e.g. "assets/logo.png"."""
+    path = cfg.get("logo")
+    if not path:
+        return None
+    p = Path(path) if Path(path).is_absolute() else ROOT / path
+    if not p.exists():
+        return None
+    from PIL import ImageOps
+    img = Image.open(p).convert("L")
+    if cfg.get("logo_style", "line") == "line":
+        # Drop the black box: keep just the light artwork, drawn in black on the page.
+        bbox = img.point(lambda v: 255 if v >= 128 else 0).getbbox()
+        if bbox:
+            img = img.crop(bbox)
+        img = ImageOps.invert(img)
+    w = round(img.width * height / img.height)
+    # Downscale with averaging, then snap to pure black/white so edges stay crisp on e-ink.
+    return img.resize((w, height), Image.LANCZOS).point(lambda v: 255 if v >= 128 else 0)
+
+
+def paste_logo(base, logo, x, y):
+    """Paste only the black pixels, so the page color shows through around the art."""
+    mask = logo.point(lambda v: 255 if v < 128 else 0).convert("1")
+    base.paste(BLACK, (round(x), round(y)), mask)
 
 
 def render(review: dict | None, cfg: dict, poster_img=None) -> Image.Image:
@@ -404,6 +461,14 @@ def render(review: dict | None, cfg: dict, poster_img=None) -> Image.Image:
     base = Image.new("RGB", (W, H), WHITE)
     cv = Canvas(W, H)
     m = 72
+
+    pos = cfg.get("logo_position", "footer")
+    sizes = {"footer": 84, "under-poster": 120, "top-right": 120}
+    logo = load_logo(cfg, int(cfg.get("logo_height", sizes.get(pos, 100))))
+    logo_room = 0
+    if logo is not None and pos == "top-right":
+        paste_logo(base, logo, W - m - logo.width, m)
+        logo_room = logo.width + 36  # header text wraps short of the logo
 
     if review is None:
         cv.text(m, H / 2, "No reviews yet.", F_TITLE, 64, BLACK)
@@ -414,12 +479,20 @@ def render(review: dict | None, cfg: dict, poster_img=None) -> Image.Image:
     if cfg.get("show_poster", True):
         pw, ph = int(W * 0.34), H - 2 * m
         if poster_img is None:
-            poster_img = load_poster(review.get("poster"), pw, ph)
+            poster_img = load_poster(review.get("poster"), pw, ph, cfg)
         else:
-            poster_img = dither_poster(poster_img, pw, ph)
+            poster_img = dither_poster(poster_img, pw, ph, cfg)
         if poster_img is not None:
             px = m + (pw - poster_img.width) // 2
             py = m + (ph - poster_img.height) // 2
+            if logo is not None and pos == "under-poster":
+                py = m  # top-align the poster and center the logo in the space below it
+                room = ph - poster_img.height
+                if room >= logo.height + 40:
+                    paste_logo(base, logo, m + (pw - logo.width) / 2,
+                               m + poster_img.height + (room - logo.height) / 2)
+                else:
+                    pos = "footer"
             base.paste(poster_img, (px, py))
             b = 3  # crisp keyline around the dithered edge
             cv.rect(px - b, py - b, px + poster_img.width + b, py, BLACK)
@@ -431,13 +504,30 @@ def render(review: dict | None, cfg: dict, poster_img=None) -> Image.Image:
 
     # Header: member, title, year + rating + like
     y = m + 26
+    head_w = tw - logo_room
     cv.text(x0, y, review["member"].upper(), F_UI_BOLD, 27, RED, tracking=0.12)
     y += 30
 
-    tsize = 72 if cv.length(review["film"] or "", F_TITLE, 72) <= tw * 1.6 else 60
-    tlines = [l for l in wrap(cv, review["film"] or "Untitled", F_TITLE, tsize, tw) if l]
+    # Title: up to 2 lines. Only the first line sits beside the logo, so only it is narrowed.
+    def title_lines(size):
+        words = (review["film"] or "Untitled").split()
+        lines, line, limit = [], "", head_w
+        for w in words:
+            trial = f"{line} {w}".strip()
+            if cv.length(trial, F_TITLE, size) <= limit or not line:
+                line = trial
+            else:
+                lines.append(line)
+                line, limit = w, tw
+        lines.append(line)
+        return lines
+
+    for tsize in (72, 60):
+        tlines = title_lines(tsize)
+        if len(tlines) <= 2:
+            break
     if len(tlines) > 2:
-        tlines = tlines[:2]
+        tlines = [tlines[0], " ".join(tlines[1:])]
         while cv.length(tlines[1] + " …", F_TITLE, tsize) > tw:
             tlines[1] = tlines[1].rsplit(" ", 1)[0]
         tlines[1] += " …"
@@ -465,8 +555,16 @@ def render(review: dict | None, cfg: dict, poster_img=None) -> Image.Image:
     footer_top = footer_base - 52
     has_footer = bool(review["watched"] or review["rewatch"])
 
+    # No poster to sit under? Fall back to the footer.
+    footer_logo = logo is not None and (pos == "footer" or (pos == "under-poster" and x0 == m))
+    if footer_logo:
+        has_footer = True
+        logo_x, logo_y = W - m - logo.width, H - m - logo.height + 4
+
     # Body
     body_bottom = (footer_top - 28) if has_footer else (H - m)
+    if footer_logo:
+        body_bottom = min(body_bottom, logo_y - 24)
     if review["spoiler"] and cfg.get("hide_spoilers", True):
         s = 44
         cv.rect(x0, y + 4, x0 + cv.length("SPOILERS", F_UI_BOLD, 22, 0.14) + 32, y + 46, RED, radius=21)
@@ -485,7 +583,10 @@ def render(review: dict | None, cfg: dict, poster_img=None) -> Image.Image:
             yb += size * 1.42
 
     if has_footer:
-        cv.rect(x0, footer_top, x0 + tw, footer_top + 2, BLACK)
+        rule_end = (logo_x - 28) if footer_logo else (x0 + tw)
+        cv.rect(x0, footer_top, rule_end, footer_top + 2, BLACK)
+        if footer_logo:
+            paste_logo(base, logo, logo_x, logo_y)
         fx = x0
         if review["watched"]:
             label = f"WATCHED {nice_date(review['watched']).upper()}"
@@ -498,6 +599,45 @@ def render(review: dict | None, cfg: dict, poster_img=None) -> Image.Image:
 
     # White text sits on top of the colored pills, so it is painted last.
     return cv.flatten(base, order=[BLACK, GREEN, BLUE, RED, YELLOW, WHITE])
+
+
+def render_setup(cfg: dict, network: str, address: str = "10.41.0.1") -> Image.Image:
+    """Instructions shown when the frame can't find a known Wi-Fi network and opens its hotspot."""
+    W, H = cfg.get("width", 1600), cfg.get("height", 1200)
+    base = Image.new("RGB", (W, H), WHITE)
+    cv = Canvas(W, H)
+    m, x = 110, 110
+
+    y = m + 30
+    cv.text(x, y, "WI-FI SETUP", F_UI_BOLD, 30, RED, tracking=0.14)
+    y += 104
+    cv.text(x, y, "Let's get this device online.", F_TITLE, 84, BLACK)
+    y += 70
+    cv.text(x, y, "It couldn't find a Wi-Fi network it knows.", F_BODY, 40, BLACK)
+
+    steps = [
+        ("On your phone, join the Wi-Fi network", network),
+        ("A setup page should open. If it doesn't, go to", f"http://{address}"),
+        ("Pick your Wi-Fi network and enter its password.", None),
+    ]
+    y += 110
+    for i, (line, bold) in enumerate(steps, 1):
+        r = 38
+        cv.ellipse(x, y - r - 14, x + 2 * r, y + r - 14, RED)
+        num = str(i)
+        cv.text(x + r - cv.length(num, F_UI_BOLD, 40) / 2, y + 2, num, F_UI_BOLD, 40, WHITE)
+        tx = x + 2 * r + 36
+        cv.text(tx, y, line, F_BODY, 42, BLACK)
+        if bold:
+            cv.text(tx, y + 64, bold, F_UI_BOLD, 46, BLACK)
+            y += 64
+        y += 128
+
+    note_y = H - m
+    cv.rect(x, note_y - 74, W - m, note_y - 72, BLACK)
+    cv.text(x, note_y - 20, "Needs a 2.4 GHz network.",
+            F_UI, 28, BLACK)
+    return to_palette(cv.flatten(base, order=[BLACK, RED, WHITE]))
 
 
 def to_palette(img: Image.Image) -> Image.Image:
@@ -525,9 +665,12 @@ def gather_reviews(cfg: dict, feed_file: str | None = None) -> list[dict]:
     return reviews
 
 
+CODE_VERSION = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()[:12]
+
+
 def selection_key(review: dict | None, cfg: dict) -> str:
-    """Changes whenever the rendered image would change: the review shown or the config."""
-    return hashlib.sha256(json.dumps([review, cfg], sort_keys=True).encode()).hexdigest()
+    """Changes whenever the rendered image would change: the review, the config or this code."""
+    return hashlib.sha256(json.dumps([review, cfg, CODE_VERSION], sort_keys=True).encode()).hexdigest()
 
 
 def build_frame(cfg: dict, reviews: list[dict], now: float | None = None) -> tuple[bytes, dict]:
@@ -554,6 +697,8 @@ def main():
     ap.add_argument("--feed-file", help="Use a local RSS file instead of fetching")
     ap.add_argument("--out", default=str(ROOT / "out"))
     ap.add_argument("--now", type=float, help="Override current time (unix seconds)")
+    ap.add_argument("--preview", action="store_true",
+                    help="Also write frame_preview.png simulating the real panel colors")
     args = ap.parse_args()
 
     cfg = json.loads(Path(args.config).read_text())
@@ -568,6 +713,8 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     (out / "frame.png").write_bytes(data)
     (out / "frame.json").write_text(json.dumps(meta, indent=2))
+    if args.preview:
+        panel_preview(Image.open(io.BytesIO(data))).save(out / "frame_preview.png")
     print(json.dumps(meta))
 
 

@@ -1,3 +1,5 @@
+# Template: pi/install.sh fills in @USER@, @REPO@ and @ARGS@ and installs it to
+# /etc/systemd/system. Re-run `sudo bash pi/install.sh` instead of copying this by hand.
 [Unit]
 Description=Letterboxd frame update
 Wants=network-online.target
@@ -5,13 +7,6 @@ After=network-online.target
 
 [Service]
 Type=oneshot
-User=pi
-# Pick ONE ExecStart. Change --display (fake -> inky or waveshare) when the panel arrives.
-#
-# A) Download the image rendered by GitHub Actions:
-ExecStart=/usr/bin/python3 /home/pi/letterboxd-frame/pi/frame.py --url https://ajclark9.github.io/letterboxd-frame/frame.png --display fake
-#
-# B) Render on the Pi itself (no GitHub needed). Checks feeds every 10 minutes even though
-#    the timer runs every minute; add --scale 2 if rendering feels slow.
-#ExecStart=/usr/bin/python3 /home/pi/letterboxd-frame/pi/frame.py --local --display fake
+User=@USER@
+ExecStart=/usr/bin/python3 @REPO@/pi/frame.py @ARGS@
 TimeoutStartSec=180

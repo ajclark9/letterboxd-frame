@@ -6,7 +6,7 @@ on:
   workflow_dispatch:          # "Run workflow" button for testing
   push:
     branches: [master]
-    paths: ["renderer/**", "fonts/**", "config.json", ".github/workflows/render.yml"]
+    paths: ["renderer/**", "fonts/**", "assets/**", "config.json", ".github/workflows/render.yml"]
 
 permissions:
   contents: write

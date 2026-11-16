@@ -1,0 +1,11 @@
+[Unit]
+Description=Check GitHub for Letterboxd frame updates every hour
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=1h
+RandomizedDelaySec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -9,8 +9,11 @@ Two ways to get the image:
   or  --display waveshare  # Waveshare 13.3" (E)
   (default --display fake just saves the image, for testing without a panel)
 
-Designed to run once and exit (systemd timer calls it every few minutes).
+Designed to run once and exit (systemd timer calls it every minute).
 A failed download never touches the screen: e-ink keeps the last image.
+
+If comitup has opened its Wi-Fi setup hotspot (it writes HOTSPOT to WIFI_STATE_FILE through
+pi/wifi-callback.sh), the screen shows Wi-Fi setup instructions instead of a review.
 """
 import argparse
 import hashlib
@@ -26,6 +29,8 @@ from PIL import Image
 
 STATE_DIR = Path.home() / ".letterboxd-frame"
 STATE_FILE = STATE_DIR / "state.json"
+WIFI_STATE_FILE = Path("/run/letterboxd-frame/wifi-state")
+COMITUP_CONF = Path("/etc/comitup.conf")
 
 
 def load_state():
@@ -62,17 +67,30 @@ def show_fake(img):
     out = STATE_DIR / "displayed.png"
     STATE_DIR.mkdir(parents=True, exist_ok=True)
     img.save(out)
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "renderer"))
+        from render import panel_preview
+        panel_preview(img).save(STATE_DIR / "displayed_preview.png")
+    except Exception as e:
+        print(f"[fake] couldn't write panel preview: {e}")
     print(f"[fake] refreshing panel... (saved {out})")
     time.sleep(25)
     print("[fake] refresh done")
+
+
+SPECTRA_PALETTE = [0, 0, 0, 255, 255, 255, 255, 255, 0, 255, 0, 0, 0, 0, 255, 0, 255, 0]
 
 
 def show_inky(img):
     from inky.auto import auto  # pip install inky
     display = auto()
     if img.size != display.resolution:
-        img = img.resize(display.resolution)
-    display.set_image(img)
+        img = img.resize(display.resolution, Image.NEAREST)
+    # The renderer already dithered everything to the panel's 6 colors. Handing the library
+    # a 6-color palette image makes it map pixels 1:1 instead of dithering a second time.
+    pal = Image.new("P", (1, 1))
+    pal.putpalette(SPECTRA_PALETTE + [0] * (768 - len(SPECTRA_PALETTE)))
+    display.set_image(img.convert("RGB").quantize(palette=pal, dither=Image.Dither.NONE))
     display.show()
 
 
@@ -140,6 +158,45 @@ def get_local(args, state):
     return data
 
 
+def wifi_state():
+    try:
+        return WIFI_STATE_FILE.read_text().strip().upper()
+    except OSError:
+        return None
+
+
+def hotspot_name():
+    try:
+        for line in COMITUP_CONF.read_text().splitlines():
+            key, _, value = line.partition(":")
+            if key.strip() == "ap_name" and value.strip():
+                return value.strip()
+    except OSError:
+        pass
+    return "Letterboxd-Frame-Setup"
+
+
+def show_setup_screen(args, state):
+    name = hotspot_name()
+    key = f"setup:{name}"
+    if state.get("screen") == key and not args.force:
+        print("Wi-Fi setup screen already showing")
+        return
+    sys.path.insert(0, str(REPO / "renderer"))
+    import render  # noqa: E402
+    try:
+        cfg = json.loads(Path(args.config).read_text())
+    except Exception:
+        cfg = {}
+    DISPLAYS[args.display](render.render_setup(cfg, name).convert("RGB"))
+    # Forget what review was showing, so it gets redrawn once Wi-Fi is back.
+    for k in ("sha256", "selection", "etag", "last_fetch"):
+        state.pop(k, None)
+    state["screen"] = key
+    save_state(state)
+    print(f"showing Wi-Fi setup screen for hotspot {name}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     src = ap.add_mutually_exclusive_group(required=True)
@@ -155,6 +212,11 @@ def main():
     args = ap.parse_args()
 
     state = load_state()
+    if wifi_state() == "HOTSPOT":
+        show_setup_screen(args, state)
+        return
+    if state.get("screen", "").startswith("setup"):
+        args.force = True  # Wi-Fi is back: replace the setup screen right away
     data = get_local(args, state) if args.local else get_remote(args, state)
     if data is None:
         save_state(state)
@@ -173,7 +235,7 @@ def main():
         return
 
     DISPLAYS[args.display](img)
-    state.update(sha256=digest, updated=time.strftime("%Y-%m-%dT%H:%M:%S"))
+    state.update(sha256=digest, screen="review", updated=time.strftime("%Y-%m-%dT%H:%M:%S"))
     save_state(state)
     print("panel updated")
 
