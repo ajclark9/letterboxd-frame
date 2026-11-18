@@ -10,7 +10,6 @@ fetch RSS → pick review → render  →   frame.png on 'frame'   ←    GET fr
 
 ```bash
 pip install -r renderer/requirements.txt
-python renderer/render.py --feed-file renderer/sample_feed.xml   # offline sample
 python renderer/render.py                                        # live feeds from config.json
 open out/frame.png
 ```
