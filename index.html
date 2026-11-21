@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Letterboxd Frame</title>
+<style>
+  body { margin: 0; background: #ddd; display: grid; place-items: center; min-height: 100vh; font-family: system-ui, sans-serif; }
+  img { max-width: 100%; height: auto; box-shadow: 0 6px 30px rgba(0,0,0,.25); background: #fff; }
+  p { color: #444; font-size: 14px; }
+</style>
+</head>
+<body>
+  <main>
+    <img src="frame.png" alt="Current frame">
+    <p id="meta"></p>
+  </main>
+<script>
+  fetch("frame.json").then(r => r.json()).then(m => {
+    document.getElementById("meta").textContent =
+      m.film ? `${m.member}: ${m.film} (${m.reviews_found} reviews in feeds)` : "No reviews";
+  }).catch(() => {});
+</script>
+</body>
+</html>
