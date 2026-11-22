@@ -47,8 +47,9 @@ The published link is public but unguessable, and only contains usernames.
 Only reviews with text are shown; diary entries without a review and list activity are skipped.
 `width`/`height` are 1600×1200; swap them for portrait.
 
-Fonts are bundled in `fonts/` (Literata for the review, Inter for labels, both under the SIL Open
-Font License). Text and shapes are drawn at 3× and snapped to solid colors, so edges stay clean
+Fonts are bundled in `fonts/` (Literata for the review, Inter for labels, Noto Emoji for emoji, all
+under the SIL Open Font License). Emoji are drawn in black-and-white from Noto Emoji, since the text
+fonts don't include them. Text and shapes are drawn at 3× and snapped to solid colors, so edges stay clean
 without anti-aliasing fringes that the panel would turn into speckle.
 
 `python renderer/render.py --preview` also writes `out/frame_preview.png`, an approximation of how the

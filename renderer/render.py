@@ -218,6 +218,63 @@ F_UI = "Inter-Medium.ttf"
 F_UI_BOLD = "Inter-Bold.ttf"
 
 
+# ---- Emoji ----
+# The text fonts have no emoji, so any character they lack but Noto Emoji has is drawn from
+# Noto Emoji (black-and-white line art, SIL Open Font License) instead of an empty box.
+EMOJI_FONT = "NotoEmoji-Medium.ttf"
+EMOJI_SCALE = 0.92  # emoji look a touch large next to text at the same size
+# Invisible pieces that glue emoji together (zero-width joiner, presentation selectors,
+# keycap, skin tones, flag tags). They belong to whatever emoji they follow.
+_EMOJI_GLUE = {0x200D, 0xFE0F, 0xFE0E, 0x20E3} | set(range(0x1F3FB, 0x1F400)) | set(range(0xE0020, 0xE0080))
+_glyph_cache = {}
+
+
+def has_glyph(name: str, ch: str) -> bool:
+    """True if font `name` really has a glyph for `ch` (not the empty-box fallback)."""
+    key = (name, ch)
+    if key not in _glyph_cache:
+        try:
+            f = font(name, 40)
+        except FileNotFoundError:
+            _glyph_cache[key] = False
+            return False
+        def mask(c):
+            im = Image.new("L", (90, 90), 0)
+            ImageDraw.Draw(im).text((10, 70), c, font=f, fill=255, anchor="ls")
+            return im.tobytes()
+        nd_key = (name, None)
+        if nd_key not in _glyph_cache:
+            _glyph_cache[nd_key] = mask("\U0010FFFD")  # unassigned: draws the empty box
+        _glyph_cache[key] = mask(ch) != _glyph_cache[nd_key]
+    return _glyph_cache[key]
+
+
+def text_runs(text: str, name: str):
+    """Split text into (segment, font name, size factor) runs, sending emoji to EMOJI_FONT."""
+    runs, cur, cur_emoji = [], "", False
+    for i, ch in enumerate(text):
+        cp = ord(ch)
+        nxt = ord(text[i + 1]) if i + 1 < len(text) else 0
+        if cp in _EMOJI_GLUE:
+            if not cur_emoji:
+                continue  # stray selector after normal text: drop it rather than draw a box
+            is_emoji = True
+        elif ch.isspace() or cp < 0x80 and nxt not in (0xFE0F, 0x20E3):
+            is_emoji = False
+        elif nxt in (0xFE0F, 0x20E3) and has_glyph(EMOJI_FONT, ch):
+            is_emoji = True  # e.g. heart + emoji selector, or a keycap digit
+        else:
+            is_emoji = not has_glyph(name, ch) and has_glyph(EMOJI_FONT, ch)
+        if cur and is_emoji != cur_emoji:
+            runs.append((cur, EMOJI_FONT if cur_emoji else name, EMOJI_SCALE if cur_emoji else 1.0))
+            cur = ""
+        cur += ch
+        cur_emoji = is_emoji
+    if cur:
+        runs.append((cur, EMOJI_FONT if cur_emoji else name, EMOJI_SCALE if cur_emoji else 1.0))
+    return runs
+
+
 class Canvas:
     def __init__(self, w, h):
         self.w, self.h = w, h
@@ -236,20 +293,25 @@ class Canvas:
         return self._fonts[key]
 
     def length(self, text, name, size, tracking=0.0):
-        f = self.font(name, size)
-        n = len(text)
-        return f.getlength(text) / SCALE + tracking * size * max(n - 1, 0)
+        total = 0.0
+        for seg, fname, k in text_runs(text, name):
+            total += self.font(fname, size * k).getlength(seg) / SCALE
+        return total + tracking * size * max(len(text) - 1, 0)
 
     def text(self, x, baseline, text, name, size, color, tracking=0.0):
-        """Draw text with its baseline at `baseline`. tracking is in ems."""
-        d, f = self._draw(color), self.font(name, size)
-        if not tracking:
-            d.text((x * SCALE, baseline * SCALE), text, font=f, fill=255, anchor="ls")
-            return
+        """Draw text with its baseline at `baseline`. tracking is in ems.
+        Emoji the main font lacks are drawn in black-and-white from the bundled emoji font."""
+        d = self._draw(color)
         cx = x * SCALE
-        for ch in text:
-            d.text((cx, baseline * SCALE), ch, font=f, fill=255, anchor="ls")
-            cx += f.getlength(ch) + tracking * size * SCALE
+        for seg, fname, k in text_runs(text, name):
+            f = self.font(fname, size * k)
+            if not tracking:
+                d.text((cx, baseline * SCALE), seg, font=f, fill=255, anchor="ls")
+                cx += f.getlength(seg)
+                continue
+            for ch in seg:
+                d.text((cx, baseline * SCALE), ch, font=f, fill=255, anchor="ls")
+                cx += f.getlength(ch) + tracking * size * SCALE
 
     def polygon(self, pts, color):
         self._draw(color).polygon([(px * SCALE, py * SCALE) for px, py in pts], fill=255)
