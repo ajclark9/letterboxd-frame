@@ -7,5 +7,9 @@
   "rotate_minutes": 60,
   "rotate_pool": 10,
   "hide_spoilers": true,
-  "show_poster": true
+  "show_poster": true,
+  "logo": "assets/logo.png",
+  "logo_position": "top-right",
+  "logo_style": "boxed",
+  "logo_height": 129
 }
