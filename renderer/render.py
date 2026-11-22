@@ -641,7 +641,7 @@ def render(review: dict | None, cfg: dict, poster_img=None) -> Image.Image:
             if line is None:
                 yb += size * 0.62
                 continue
-            cv.text(x0, yb, line, F_BODY, size, BLACK)
+            cv.text(x0, yb, "line", F_BODY, size, BLACK)
             yb += size * 1.42
 
     if has_footer:
